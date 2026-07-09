@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { db } from "../db/dexieClient";
 import { seedInitialData } from "../db/seed";
-import { buildStreakProtectionPlan } from "../features/aiPlanner/aiPlannerClient";
+import { AiEngineClient } from "../features/aiPlanner/AiEngineClient";
 import { subscribeToNetworkStatus } from "../services/networkStatus";
 import type {
-  AiScheduleAdjustment,
+  AiCommandMessage,
   Checkin,
   CheckinStatus,
   Habit,
   Reward,
   RewardRedemption,
-  ScheduleAdjustment,
   SyncMutation,
   Wallet,
   WalletTransaction,
@@ -19,14 +18,9 @@ import { addDays, isDueTodayOrEarlier, toDateKey } from "../utils/dates";
 import { createId, createIdempotencyKey } from "../utils/id";
 import { levelFromXp } from "../utils/leveling";
 
-interface PlannerContext {
-  stressLevel: "low" | "medium" | "high";
-  travel: boolean;
-  availableMinutes: number;
-  note: string;
-}
-
 const now = () => new Date().toISOString();
+
+const aiClient = new AiEngineClient();
 
 export function useLevelUpStore() {
   const [loading, setLoading] = useState(true);
@@ -46,17 +40,16 @@ export function useLevelUpStore() {
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [redemptions, setRedemptions] = useState<RewardRedemption[]>([]);
   const [pendingMutations, setPendingMutations] = useState<SyncMutation[]>([]);
-  const [lastPlan, setLastPlan] = useState<AiScheduleAdjustment | null>(null);
+  const [aiCommandHistory, setAiCommandHistory] = useState<AiCommandMessage[]>([]);
 
   const refresh = useCallback(async () => {
-    const [habitRows, checkinRows, walletRow, rewardRows, redemptionRows, mutations, latestPlan] = await Promise.all([
+    const [habitRows, checkinRows, walletRow, rewardRows, redemptionRows, mutations] = await Promise.all([
       db.habits.orderBy("nextDueDate").toArray(),
       db.checkins.orderBy("createdAt").reverse().toArray(),
       db.wallet.get("local"),
       db.rewards.toArray(),
       db.redemptions.orderBy("redeemedAt").reverse().toArray(),
       db.syncMutations.toArray(),
-      db.aiAdjustments.orderBy("createdAt").last(),
     ]);
 
     setHabits(habitRows);
@@ -67,7 +60,6 @@ export function useLevelUpStore() {
     setRewards(rewardRows.filter((reward) => reward.isActive));
     setRedemptions(redemptionRows);
     setPendingMutations(mutations.filter((mutation) => !mutation.processedAt));
-    setLastPlan(latestPlan ?? null);
     setLoading(false);
   }, []);
 
@@ -110,7 +102,7 @@ export function useLevelUpStore() {
     return new Set(checkins.filter((checkin) => checkin.date === today).map((checkin) => checkin.habitId));
   }, [checkins]);
 
-  const addMutation = async (entityType: string, entityId: string, operation: SyncMutation["operation"], payload: unknown) => {
+  const addMutationRecord = async (entityType: string, entityId: string, operation: SyncMutation["operation"], payload: unknown) => {
     await db.syncMutations.add({
       id: createId("mutation"),
       entityType,
@@ -161,7 +153,7 @@ export function useLevelUpStore() {
 
     await db.wallet.put(updated);
     await db.transactions.add(transaction);
-    await addMutation("wallet_transaction", transaction.id, "create", transaction);
+    await addMutationRecord("wallet_transaction", transaction.id, "create", transaction);
     return updated;
   };
 
@@ -208,8 +200,8 @@ export function useLevelUpStore() {
           habit.id,
           idempotencyKey,
         );
-        await addMutation("checkin", checkin.id, "create", checkin);
-        await addMutation("habit", habit.id, "update", nextHabit);
+        await addMutationRecord("checkin", checkin.id, "create", checkin);
+        await addMutationRecord("habit", habit.id, "update", nextHabit);
       });
 
       await refresh();
@@ -238,7 +230,7 @@ export function useLevelUpStore() {
       };
 
       await db.habits.add(habit);
-      await addMutation("habit", habit.id, "create", habit);
+      await addMutationRecord("habit", habit.id, "create", habit);
       await refresh();
     },
     [refresh],
@@ -266,7 +258,7 @@ export function useLevelUpStore() {
         syncStatus: online ? "synced" : "pending",
       };
       await db.redemptions.add(redemption);
-      await addMutation("reward_redemption", redemption.id, "create", redemption);
+      await addMutationRecord("reward_redemption", redemption.id, "create", redemption);
       setWallet(transactionWallet);
       await refresh();
       return true;
@@ -274,77 +266,55 @@ export function useLevelUpStore() {
     [online, refresh, wallet],
   );
 
-  const generateProtectionPlan = useCallback(
-    async (context: PlannerContext) => {
-      const outputJson = buildStreakProtectionPlan({ habits: todayHabits, ...context });
-      const plan: AiScheduleAdjustment = {
-        id: createId("ai"),
-        habitId: "multi",
-        inputContext: context,
-        outputJson,
-        createdAt: now(),
-      };
-      await db.aiAdjustments.add(plan);
-      await refresh();
-      return outputJson;
-    },
-    [refresh, todayHabits],
-  );
+  const sendAiCommand = useCallback(async (message: string) => {
+    const userMsg: AiCommandMessage = {
+      id: createId("msg"),
+      role: "user",
+      content: message,
+      timestamp: now()
+    };
+    setAiCommandHistory(prev => [...prev, userMsg]);
 
-  const acceptProtection = useCallback(
-    async (adjustment: ScheduleAdjustment) => {
-      const habit = await db.habits.get(adjustment.habitId);
-      if (!habit) {
-        return;
-      }
+    const { reply, mutations } = await aiClient.sendCommand(message);
 
-      if (adjustment.decision === "maintenance_mode") {
-        await completeHabit(habit, "maintenance");
-        return;
-      }
-
-      const date = toDateKey();
-      const checkin: Checkin = {
-        id: createId("checkin"),
-        habitId: habit.id,
-        date,
-        status: adjustment.decision === "rest_day" ? "rest_day" : "rollover",
-        valueCompleted: 0,
-        coinsDelta: adjustment.rewards.coins,
-        xpDelta: adjustment.rewards.xp,
-        healthDelta: adjustment.rewards.healthDelta,
-        note: adjustment.reason,
-        createdAt: now(),
-        syncStatus: online ? "synced" : "pending",
-      };
-
-      const updatedHabit: Habit = {
-        ...habit,
-        nextDueDate: adjustment.decision === "rollover" && adjustment.newDate ? adjustment.newDate : addDays(date, 1),
-        updatedAt: now(),
-      };
-
-      await db.transaction("rw", db.habits, db.checkins, db.wallet, db.transactions, db.syncMutations, async () => {
-        await db.checkins.put(checkin);
-        await db.habits.put(updatedHabit);
-        if (adjustment.rewards.coins || adjustment.rewards.xp) {
-          await applyWalletDelta(
-            "maintenance_reward",
-            adjustment.rewards.coins,
-            adjustment.rewards.xp,
-            "habit",
-            habit.id,
-            createIdempotencyKey(["protection", habit.id, date, adjustment.decision]),
-          );
+    if (mutations && mutations.length > 0) {
+      await db.transaction("rw", db.habits, db.rewards, db.syncMutations, async () => {
+        for (const m of mutations) {
+          if (m.type === "UPDATE_DIFFICULTY") {
+            const allHabits = await db.habits.toArray();
+            for (const h of allHabits) {
+              const updated = { ...h, difficulty: m.payload.newDifficulty, updatedAt: now() };
+              await db.habits.put(updated);
+              await addMutationRecord("habit", h.id, "update", updated);
+            }
+          } else if (m.type === "ADD_REWARD") {
+            const newReward: Reward = {
+              id: createId("reward"),
+              title: m.payload.title,
+              description: m.payload.description,
+              costCoins: m.payload.costCoins,
+              durationMinutes: m.payload.durationMinutes,
+              category: m.payload.category,
+              isActive: true,
+              createdAt: now()
+            };
+            await db.rewards.add(newReward);
+            await addMutationRecord("reward", newReward.id, "create", newReward);
+          }
         }
-        await addMutation("checkin", checkin.id, "create", checkin);
-        await addMutation("habit", habit.id, "update", updatedHabit);
       });
-
       await refresh();
-    },
-    [completeHabit, online, refresh],
-  );
+    }
+
+    const systemMsg: AiCommandMessage = {
+      id: createId("msg"),
+      role: "system",
+      content: reply,
+      timestamp: now(),
+      mutations
+    };
+    setAiCommandHistory(prev => [...prev, systemMsg]);
+  }, [refresh]);
 
   return {
     loading,
@@ -358,11 +328,10 @@ export function useLevelUpStore() {
     rewards,
     redemptions,
     pendingMutations,
-    lastPlan,
+    aiCommandHistory,
     completeHabit,
     createHabit,
     redeemReward,
-    generateProtectionPlan,
-    acceptProtection,
+    sendAiCommand,
   };
 }

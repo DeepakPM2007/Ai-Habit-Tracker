@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import type { Difficulty, Habit, HabitKind, Reward, ScheduleAdjustment, TabKey } from "../types/domain";
+import type { AiCommandMessage, Difficulty, Habit, HabitKind, Reward, ScheduleAdjustment, TabKey } from "../types/domain";
 import { useLevelUpStore } from "../hooks/useLevelUpStore";
 import { formatShortDate, toDateKey } from "../utils/dates";
 import { levelProgress, xpForNextLevel } from "../utils/leveling";
@@ -7,7 +7,7 @@ import { levelProgress, xpForNextLevel } from "../utils/leveling";
 const tabs: { key: TabKey; label: string; icon: string }[] = [
   { key: "today", label: "Today", icon: "M4 12h16M12 4v16" },
   { key: "habits", label: "Habits", icon: "M5 13l4 4L19 7" },
-  { key: "planner", label: "AI Plan", icon: "M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48 2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48 2.83-2.83" },
+  { key: "planner", label: "AI Center", icon: "M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48 2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48 2.83-2.83" },
   { key: "rewards", label: "Rewards", icon: "M20 12v10H4V12m16 0H4m16 0H4m2-5h12v5H6z" },
   { key: "profile", label: "Profile", icon: "M20 21a8 8 0 0 0-16 0M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" },
 ];
@@ -69,11 +69,9 @@ export function App() {
         )}
         {activeTab === "habits" && <HabitsView habits={store.habits} onCreateHabit={store.createHabit} />}
         {activeTab === "planner" && (
-          <PlannerView
-            habits={store.todayHabits}
-            lastPlan={store.lastPlan?.outputJson ?? []}
-            onGenerate={store.generateProtectionPlan}
-            onAccept={store.acceptProtection}
+          <AiCommandView
+            commandHistory={store.aiCommandHistory}
+            onSendCommand={store.sendAiCommand}
           />
         )}
         {activeTab === "rewards" && <RewardsView rewards={store.rewards} coins={store.wallet.coins} onRedeem={store.redeemReward} />}
@@ -164,7 +162,7 @@ function TodayView({
 
 function HabitCard({ habit, completed, onComplete }: { habit: Habit; completed: boolean; onComplete: () => void }) {
   return (
-    <article className={`habit-card ${completed ? "done" : ""}`} style={{ borderColor: habit.color }}>
+    <article className={`habit-card ${completed ? "done" : ""}`} style={{ "--habit-color": habit.color } as any}>
       <div className="habit-card-top">
         <span className={`kind-pill ${habit.kind}`}>{habit.kind === "quit" ? "Quit" : "Build"}</span>
         <span>{habit.currentStreak} day streak</span>
@@ -227,12 +225,14 @@ function HabitsView({
           <input name="targetCount" type="number" min="1" defaultValue="1" aria-label="Target count" />
           <input name="targetUnit" placeholder="minutes, pages..." defaultValue="session" />
         </div>
-        <select value={difficulty} onChange={(event) => setDifficulty(event.target.value as Difficulty)}>
-          <option value="easy">Easy</option>
-          <option value="medium">Medium</option>
-          <option value="hard">Hard</option>
-          <option value="heroic">Heroic</option>
-        </select>
+        <div className="difficulty-selector">
+          {(["easy", "medium", "hard", "heroic"] as const).map((level) => (
+            <div key={level} className={`difficulty-card ${difficulty === level ? "active" : ""}`} onClick={() => setDifficulty(level)}>
+              <strong>{level.charAt(0).toUpperCase() + level.slice(1)}</strong>
+              <span>{level === "easy" ? "1x Rewards" : level === "medium" ? "1.6x Rewards" : level === "hard" ? "2.2x Rewards" : "3x Rewards"}</span>
+            </div>
+          ))}
+        </div>
         <button className="primary-action">Add habit</button>
       </form>
       {habits.map((habit) => (
@@ -242,54 +242,51 @@ function HabitsView({
   );
 }
 
-function PlannerView({
-  habits,
-  lastPlan,
-  onGenerate,
-  onAccept,
+function AiCommandView({
+  commandHistory,
+  onSendCommand,
 }: {
-  habits: Habit[];
-  lastPlan: ScheduleAdjustment[];
-  onGenerate: (context: { stressLevel: "low" | "medium" | "high"; travel: boolean; availableMinutes: number; note: string }) => Promise<ScheduleAdjustment[]>;
-  onAccept: (adjustment: ScheduleAdjustment) => Promise<void>;
+  commandHistory: AiCommandMessage[];
+  onSendCommand: (message: string) => Promise<void>;
 }) {
-  const [stressLevel, setStressLevel] = useState<"low" | "medium" | "high">("medium");
-  const [travel, setTravel] = useState(false);
-  const [availableMinutes, setAvailableMinutes] = useState(10);
-  const [note, setNote] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!message.trim()) return;
+    const msg = message;
+    setMessage("");
+    await onSendCommand(msg);
+  }
 
   return (
     <section className="stack">
-      <SectionTitle title="Streak Protection" detail={`${habits.length} due`} />
+      <SectionTitle title="AI Command Center" detail="Manage your app" />
       <div className="planner-panel">
-        <div className="segmented">
-          {(["low", "medium", "high"] as const).map((level) => (
-            <button key={level} type="button" className={stressLevel === level ? "active" : ""} onClick={() => setStressLevel(level)}>
-              {level}
-            </button>
-          ))}
+        <div className="ai-chat-history">
+          {commandHistory.length === 0 ? (
+            <div className="empty-state" style={{ padding: "10px" }}>
+              <p>Type a command like "add a cheat meal reward" or "make all habits heroic".</p>
+            </div>
+          ) : (
+            commandHistory.map((msg) => (
+              <div key={msg.id} className={`ai-message ${msg.role}`}>
+                {msg.content}
+              </div>
+            ))
+          )}
         </div>
-        <label className="toggle-row">
-          <span>Travel day</span>
-          <input type="checkbox" checked={travel} onChange={(event) => setTravel(event.target.checked)} />
-        </label>
-        <label className="range-row">
-          <span>{availableMinutes} minutes available</span>
-          <input type="range" min="1" max="90" value={availableMinutes} onChange={(event) => setAvailableMinutes(Number(event.target.value))} />
-        </label>
-        <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Context for the planner" rows={3} />
-        <button className="primary-action" onClick={() => onGenerate({ stressLevel, travel, availableMinutes, note })}>
-          Generate JSON plan
-        </button>
+        <form onSubmit={handleSubmit} style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+          <input
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Tell the AI what to do..."
+            required
+            autoComplete="off"
+          />
+          <button type="submit" className="primary-action" style={{ width: "80px", minHeight: "100%" }}>Send</button>
+        </form>
       </div>
-      {lastPlan.map((adjustment) => (
-        <article className="json-card" key={`${adjustment.habitId}-${adjustment.decision}`}>
-          <pre>{JSON.stringify(adjustment, null, 2)}</pre>
-          <button className="secondary-action" onClick={() => onAccept(adjustment)}>
-            Accept option
-          </button>
-        </article>
-      ))}
     </section>
   );
 }
@@ -343,7 +340,7 @@ function ProfileView({
       <SectionTitle title="Profile" detail="Local-first" />
       <div className="profile-grid">
         {stats.map(([label, value]) => (
-          <div key={label}>
+          <div key={label as string}>
             <span>{label}</span>
             <strong>{value}</strong>
           </div>

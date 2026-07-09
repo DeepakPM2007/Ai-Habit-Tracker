@@ -133,3 +133,16 @@ export interface AiScheduleAdjustment {
   accepted?: boolean;
   createdAt: string;
 }
+
+export interface AppMutation {
+  type: "ADD_REWARD" | "UPDATE_DIFFICULTY";
+  payload: any;
+}
+
+export interface AiCommandMessage {
+  id: string;
+  role: "user" | "system";
+  content: string;
+  timestamp: string;
+  mutations?: AppMutation[];
+}
