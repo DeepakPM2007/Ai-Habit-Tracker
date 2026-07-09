@@ -46,6 +46,17 @@ export class LevelUpDatabase extends Dexie {
       syncMutations: "id, entityType, entityId, processedAt, mutationTimestamp",
       aiAdjustments: "id, habitId, accepted, createdAt",
     });
+    this.version(3).stores({
+      goals: "id, status, updatedAt",
+      habits: "id, kind, isActive, nextDueDate, updatedAt",
+      checkins: "id, [habitId+date], date, syncStatus, createdAt",
+      wallet: "id",
+      transactions: "id, idempotencyKey, syncStatus, createdAt",
+      rewards: "id, isActive, costCoins",
+      redemptions: "id, rewardId, syncStatus, redeemedAt, isUsed",
+      syncMutations: "id, entityType, entityId, processedAt, mutationTimestamp",
+      aiAdjustments: "id, habitId, accepted, createdAt",
+    });
   }
 }
 

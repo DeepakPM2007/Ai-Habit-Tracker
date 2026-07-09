@@ -1,10 +1,10 @@
-import { FormEvent, useMemo, useState } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import React, { useState, useEffect, type FormEvent, useMemo } from "react";
 import type { AiCommandMessage, Difficulty, Habit, HabitKind, Reward, TabKey } from "../types/domain";
 import { useLevelUpStore } from "../hooks/useLevelUpStore";
 import { formatShortDate, toDateKey } from "../utils/dates";
 import { levelProgress, xpForNextLevel } from "../utils/leveling";
 import { createId } from "../utils/id";
+import { playAddictiveDing } from "../utils/audio";
 
 const tabs: { key: TabKey; label: string; icon: string }[] = [
   { key: "today", label: "Today", icon: "M4 12h16M12 4v16" },
@@ -22,7 +22,6 @@ function Icon({ path }: { path: string }) {
   );
 }
 
-import React from "react";
 
 class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: any}> {
   constructor(props: {children: React.ReactNode}) {
@@ -114,7 +113,7 @@ function InnerApp() {
             onSendCommand={store.sendAiCommand}
           />
         )}
-        {activeTab === "rewards" && <RewardsView rewards={store.rewards} coins={store.wallet.coins} onRedeem={store.redeemReward} />}
+        {activeTab === "rewards" && <RewardsView rewards={store.rewards} redemptions={store.redemptions} coins={store.wallet.coins} onRedeem={store.redeemReward} onUseItem={store.useInventoryItem} onCompleteItem={store.completeInventoryItem} />}
         {activeTab === "profile" && (
           <ProfileView
             wallet={store.wallet}
@@ -160,13 +159,13 @@ function OnboardingView({ onComplete }: { onComplete: (name: string, age: number
     // Quick helper to calc coins like we do in useLevelUpStore
     const calcRewards = (kind: string, timeStr: string, diff: string) => {
       const time = parseInt(timeStr, 10) || 10;
-      const baseCoin = Math.max(1, Math.floor(time / 2));
-      const kindMultiplier = kind === "quit" ? 2 : 1; 
+      // Quit habits are hard one-time daily resistances, give them a flat base equivalent to 60 mins
+      const baseCoin = kind === "quit" ? 30 : Math.max(1, Math.floor(time / 2));
       const multipliers: Record<string, number> = { easy: 1, medium: 1.6, hard: 2.2, heroic: 3 };
       const m = multipliers[diff];
       return {
-        coin: Math.round(baseCoin * m * kindMultiplier),
-        xp: Math.round(baseCoin * 2.5 * m * kindMultiplier),
+        coin: Math.round(baseCoin * m),
+        xp: Math.round(baseCoin * 2.5 * m),
         hpPenalty: kind === "quit" ? Math.round(5 * m) : 3,
       };
     };
@@ -233,10 +232,7 @@ function OnboardingView({ onComplete }: { onComplete: (name: string, age: number
           <>
             <h2>Choose 1 Habit to Quit</h2>
             <p>What is one thing you want to stop doing?</p>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 100px", gap: "8px", marginBottom: "16px" }}>
-              <input placeholder="Bad Habit (e.g. Doomscrolling)" value={q1Title} onChange={e => setQ1Title(e.target.value)} style={{ margin: 0 }} />
-              <input type="number" placeholder="Mins/day" value={q1Time} onChange={e => setQ1Time(e.target.value)} style={{ margin: 0 }} />
-            </div>
+            <input placeholder="Bad Habit (e.g. Doomscrolling)" value={q1Title} onChange={e => setQ1Title(e.target.value)} style={{ marginBottom: "16px" }} />
             <button className="primary-action" onClick={finish}>Start My Journey</button>
           </>
         )}
@@ -291,7 +287,7 @@ function TodayView({
 }: {
   habits: Habit[];
   completedToday: Set<string>;
-  onComplete: (habit: Habit) => Promise<void>;
+  onComplete: (habit: Habit, status?: any) => Promise<void>;
 }) {
   return (
     <section className="stack">
@@ -300,14 +296,14 @@ function TodayView({
         <EmptyState title="You are clear for today" body="Open rewards, enjoy the win, or add a new habit for tomorrow." />
       ) : (
         habits.map((habit) => (
-          <HabitCard key={habit.id} habit={habit} completed={completedToday.has(habit.id)} onComplete={() => onComplete(habit)} />
+          <HabitCard key={habit.id} habit={habit} completed={completedToday.has(habit.id)} onComplete={(status) => onComplete(habit, status)} />
         ))
       )}
     </section>
   );
 }
 
-function HabitCard({ habit, completed, onComplete }: { habit: Habit; completed: boolean; onComplete: () => void }) {
+function HabitCard({ habit, completed, onComplete }: { habit: Habit; completed: boolean; onComplete: (status?: string) => void }) {
   return (
     <article className={`habit-card ${completed ? "done" : ""}`} style={{ "--habit-color": habit.color } as any}>
       <div className="habit-card-top">
@@ -323,9 +319,16 @@ function HabitCard({ habit, completed, onComplete }: { habit: Habit; completed: 
         <span>{habit.difficulty.toUpperCase()}</span>
         <span>{habit.coinReward} coins</span>
       </div>
-      <button className="primary-action" disabled={completed} onClick={onComplete}>
-        {completed ? "Logged" : habit.kind === "quit" ? "I resisted" : "Complete"}
-      </button>
+      <div style={{ display: "flex", gap: "8px" }}>
+        <button className="primary-action" style={{ flex: 1 }} disabled={completed} onClick={() => onComplete()}>
+          {completed ? "Logged" : habit.kind === "quit" ? "I resisted" : "Complete"}
+        </button>
+        {habit.kind === "quit" && !completed && (
+          <button className="secondary-action" style={{ flex: 1, borderColor: "var(--danger)", color: "var(--danger)" }} onClick={() => onComplete("failed")}>
+            I failed
+          </button>
+        )}
+      </div>
     </article>
   );
 }
@@ -407,9 +410,9 @@ function AiCommandView({
   }
 
   const quickActions = [
-    { label: "➕ Add", template: "Add a habit to [read] for [30] minutes on [medium] difficulty" },
-    { label: "✏️ Alter", template: "Alter the habit called [...] to heroic" },
-    { label: "🗑️ Delete", template: "Delete the habit called [...]" },
+    { label: "➕ Add", template: "Add a habit to read for 30 minutes on medium difficulty" },
+    { label: "✏️ Alter", template: "Alter the habit called read to heroic" },
+    { label: "🗑️ Delete", template: "Delete the habit called read" },
   ];
 
   return (
@@ -471,9 +474,117 @@ function AiCommandView({
   );
 }
 
-function RewardsView({ rewards, coins, onRedeem }: { rewards: Reward[]; coins: number; onRedeem: (reward: Reward) => Promise<boolean> }) {
+function ConfirmModal({ isOpen, title, onConfirm, onCancel, confirmText = "Confirm" }: { isOpen: boolean; title: string; onConfirm: () => void; onCancel: () => void; confirmText?: string }) {
+  if (!isOpen) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "24px" }}>
+      <div style={{ background: "var(--surface)", padding: "24px", borderRadius: "var(--radius-lg)", width: "100%", maxWidth: "320px", display: "flex", flexDirection: "column", gap: "24px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 24px 48px rgba(0,0,0,0.5)" }}>
+        <h3 style={{ margin: 0, fontSize: "1.2rem", fontWeight: "600", textAlign: "center" }}>{title}</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+          <button className="secondary-action" onClick={onCancel}>Cancel</button>
+          <button className="primary-action" onClick={onConfirm}>{confirmText}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActiveTimer({ redemption, reward, onComplete }: { redemption: RewardRedemption; reward: Reward; onComplete: () => void }) {
+  const [timeLeft, setTimeLeft] = useState("");
+
+  useEffect(() => {
+    if (!redemption.activatedAt) return;
+    const end = new Date(redemption.activatedAt).getTime() + (reward.durationMinutes * 60 * 1000);
+    
+    const tick = () => {
+      const nowMs = Date.now();
+      const diff = end - nowMs;
+      if (diff <= 0) {
+        onComplete();
+        if (Notification.permission === "granted") {
+          new Notification("Time's Up!", { body: `Your ${reward.title} has finished!` });
+        }
+        playAddictiveDing();
+      } else {
+        const m = Math.floor(diff / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        setTimeLeft(`${m}:${s.toString().padStart(2, "0")}`);
+      }
+    };
+    
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [redemption, reward, onComplete]);
+
+  return (
+    <div style={{ background: "rgba(79, 178, 134, 0.1)", border: "1px solid var(--accent)", borderRadius: "var(--radius-md)", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div>
+        <div style={{ fontSize: "0.85rem", color: "var(--accent)", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "4px" }}>Active Perk</div>
+        <div style={{ fontWeight: "600" }}>{reward.title}</div>
+      </div>
+      <div style={{ fontSize: "1.5rem", fontWeight: "bold", fontFamily: "monospace", color: "var(--accent)" }}>
+        {timeLeft}
+      </div>
+    </div>
+  );
+}
+
+function RewardsView({ rewards, redemptions, coins, onRedeem, onUseItem, onCompleteItem }: { rewards: Reward[]; redemptions: RewardRedemption[]; coins: number; onRedeem: (reward: Reward) => Promise<boolean>; onUseItem: (id: string) => Promise<boolean>; onCompleteItem: (id: string) => Promise<void> }) {
+  const [confirmState, setConfirmState] = useState<{ isOpen: boolean; type: "buy" | "use" | null; reward?: Reward; item?: RewardRedemption }>({ isOpen: false, type: null });
+
+  const activeItems = redemptions.filter(r => !r.isUsed && r.activatedAt);
+  const unusedItems = redemptions.filter(r => !r.isUsed && !r.activatedAt);
+  
+  const handleConfirm = async () => {
+    if (confirmState.type === "buy" && confirmState.reward) {
+      await onRedeem(confirmState.reward);
+    } else if (confirmState.type === "use" && confirmState.item) {
+      if (Notification.permission === "default") {
+        await Notification.requestPermission();
+      }
+      await onUseItem(confirmState.item.id);
+    }
+    setConfirmState({ isOpen: false, type: null });
+  };
+
   return (
     <section className="stack">
+      <ConfirmModal 
+        isOpen={confirmState.isOpen} 
+        title={confirmState.type === "buy" ? `Purchase ${confirmState.reward?.title} for ${confirmState.reward?.costCoins} coins?` : `Use ${confirmState.reward?.title}?`}
+        onCancel={() => setConfirmState({ isOpen: false, type: null })}
+        onConfirm={handleConfirm}
+        confirmText={confirmState.type === "buy" ? "Purchase" : "Use"}
+      />
+
+      {activeItems.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "16px" }}>
+          {activeItems.map(item => {
+            const r = rewards.find(x => x.id === item.rewardId);
+            if (!r) return null;
+            return <ActiveTimer key={item.id} redemption={item} reward={r} onComplete={() => onCompleteItem(item.id)} />;
+          })}
+        </div>
+      )}
+
+      {unusedItems.length > 0 && (
+        <>
+          <SectionTitle title="Inventory" detail={`${unusedItems.length} items`} />
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "24px" }}>
+            {unusedItems.map(item => {
+              const r = rewards.find(x => x.id === item.rewardId);
+              if (!r) return null;
+              return (
+                <button key={item.id} className="secondary-action" onClick={() => setConfirmState({ isOpen: true, type: "use", item, reward: r })}>
+                  🧪 {r.title}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
       <SectionTitle title="Rewards" detail={`${coins} coins`} />
       {rewards.map((reward) => (
         <article className="reward-card" key={reward.id}>
@@ -482,7 +593,7 @@ function RewardsView({ rewards, coins, onRedeem }: { rewards: Reward[]; coins: n
             <h2>{reward.title}</h2>
             <p>{reward.description}</p>
           </div>
-          <button className="coin-button" disabled={coins < reward.costCoins} onClick={() => onRedeem(reward)}>
+          <button className="coin-button" onClick={() => setConfirmState({ isOpen: true, type: "buy", reward })}>
             {reward.costCoins}
           </button>
         </article>
@@ -524,7 +635,7 @@ function ProfileView({
     // Convert to array and sort by date
     return Object.entries(dataMap)
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .slice(-14) // Show last 14 active days
+      .slice(-7) // Show last 7 active days
       .map(([date, count]) => ({
         date: formatShortDate(date),
         completions: count
@@ -545,16 +656,18 @@ function ProfileView({
       
       {chartData.length > 0 && (
         <div className="chart-container" style={{ background: "rgba(255,255,255,0.05)", padding: "16px", borderRadius: "16px", marginTop: "16px" }}>
-          <h3 style={{ marginBottom: "16px", fontSize: "14px", color: "var(--fg-muted)" }}>Recent Completions</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-              <XAxis dataKey="date" stroke="rgba(255,255,255,0.5)" fontSize={12} />
-              <YAxis stroke="rgba(255,255,255,0.5)" fontSize={12} allowDecimals={false} />
-              <Tooltip contentStyle={{ background: "#222", border: "none", borderRadius: "8px" }} />
-              <Line type="monotone" dataKey="completions" stroke="#4fb286" strokeWidth={3} dot={{ r: 4, fill: "#4fb286" }} />
-            </LineChart>
-          </ResponsiveContainer>
+          <h3>Consistency (Last 7 Days)</h3>
+          <div style={{ height: "150px", width: "100%", display: "flex", alignItems: "flex-end", gap: "8px", marginTop: "16px", padding: "10px", borderBottom: "1px solid var(--line)", borderLeft: "1px solid var(--line)" }}>
+            {chartData.map((d) => {
+              const heightPct = Math.max(5, (d.completions / Math.max(1, Math.max(...chartData.map(x => x.completions)))) * 100);
+              return (
+                <div key={d.date} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
+                  <div style={{ width: "100%", background: "#4fb286", height: `${heightPct}%`, borderRadius: "4px 4px 0 0", minHeight: "4px" }} title={`${d.completions} completions`} />
+                  <span style={{ fontSize: "10px", color: "var(--muted)" }}>{d.date.slice(5)}</span>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 

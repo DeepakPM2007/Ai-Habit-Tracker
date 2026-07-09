@@ -86,11 +86,14 @@ export interface Reward {
 }
 
 export interface RewardRedemption {
-  id: string;
+  id: string; // Used for offline caching
   rewardId: string;
   walletTransactionId: string;
   redeemedAt: string;
-  syncStatus: SyncStatus;
+  isUsed?: boolean;
+  activatedAt?: string;
+  usedAt?: string;
+  syncStatus: "pending" | "synced" | "error";
 }
 
 export interface SyncMutation {

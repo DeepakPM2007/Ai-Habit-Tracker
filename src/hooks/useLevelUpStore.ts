@@ -278,11 +278,12 @@ export function useLevelUpStore() {
       
       // Calculate reward based on time/count. Assume minimum base of 10 if unit is "session" or low count.
       const normalizedTime = input.targetUnit.includes("min") ? input.targetCount : (input.targetCount * 10);
-      const baseCoin = Math.max(1, Math.floor(normalizedTime / 2));
-      const kindMultiplier = input.kind === "quit" ? 2 : 1; // Double points for breaking bad habits
       
-      const calcCoin = Math.round(baseCoin * multipliers[input.difficulty] * kindMultiplier);
-      const calcXp = Math.round(baseCoin * 2.5 * multipliers[input.difficulty] * kindMultiplier);
+      // Quit habits are hard one-time daily resistances, give them a flat base equivalent to 60 mins (30 base)
+      const baseCoin = input.kind === "quit" ? 30 : Math.max(1, Math.floor(normalizedTime / 2));
+      
+      const calcCoin = Math.round(baseCoin * multipliers[input.difficulty]);
+      const calcXp = Math.round(baseCoin * 2.5 * multipliers[input.difficulty]);
 
       const createdAt = now();
       const habit: Habit = {
@@ -317,17 +318,33 @@ export function useLevelUpStore() {
   const redeemReward = useCallback(
     async (reward: Reward) => {
       const current = (await db.wallet.get("local")) ?? wallet;
-      if (current.coins < reward.costCoins) {
-        return false;
-      }
+      // TEMPORARILY DISABLED COIN CHECK SO USER CAN TEST EXPENSIVE ITEMS
+      // if (current.coins < reward.costCoins) {
+      //   return false;
+      // }
       
-      let healthDelta = 0;
-      if (reward.title.includes("Small Recovery")) healthDelta = 20;
-      if (reward.title.includes("Medium Recovery")) healthDelta = 50;
-      if (reward.title.includes("Large Recovery")) healthDelta = 100;
+      const allRedemptions = await db.redemptions.where("rewardId").equals(reward.id).toArray();
+      const isHighCost = reward.costCoins >= 500;
+      
+      if (isHighCost) {
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const recentPurchases = allRedemptions.filter(r => r.redeemedAt >= sevenDaysAgo);
+        if (recentPurchases.length > 0) {
+          setErrorToast(`You can only buy ${reward.title} once per week!`);
+          setTimeout(() => setErrorToast(null), 3000);
+          return false;
+        }
+      } else {
+        const unusedCount = allRedemptions.filter(r => !r.isUsed).length;
+        if (unusedCount >= 3) {
+          setErrorToast(`You can only carry 3 ${reward.title} at a time!`);
+          setTimeout(() => setErrorToast(null), 3000);
+          return false;
+        }
+      }
 
       const idempotencyKey = createIdempotencyKey(["reward", reward.id, now()]);
-      const transactionWallet = await applyWalletDelta("reward_purchase", -reward.costCoins, 0, "reward", reward.id, idempotencyKey, healthDelta);
+      const transactionWallet = await applyWalletDelta("reward_purchase", -reward.costCoins, 0, "reward", reward.id, idempotencyKey, 0);
       const txn = await db.transactions.where("idempotencyKey").equals(idempotencyKey).first();
       if (!txn) {
         return false;
@@ -338,6 +355,7 @@ export function useLevelUpStore() {
         rewardId: reward.id,
         walletTransactionId: txn.id,
         redeemedAt: now(),
+        isUsed: false,
         syncStatus: online ? "synced" : "pending",
       };
       await db.redemptions.add(redemption);
@@ -347,6 +365,59 @@ export function useLevelUpStore() {
       return true;
     },
     [online, refresh, wallet],
+  );
+
+  const useInventoryItem = useCallback(
+    async (redemptionId: string) => {
+      const redemption = await db.redemptions.get(redemptionId);
+      if (!redemption || redemption.isUsed) return false;
+
+      const reward = await db.rewards.get(redemption.rewardId);
+      if (!reward) return false;
+
+      let healthDelta = 0;
+      if (reward.title.includes("Small Recovery")) healthDelta = 20;
+      if (reward.title.includes("Medium Recovery")) healthDelta = 50;
+      if (reward.title.includes("Large Recovery")) healthDelta = 100;
+
+      const current = (await db.wallet.get("local")) ?? wallet;
+      if (healthDelta > 0 && current.health >= 100) {
+        setErrorToast("Your health is already full!");
+        setTimeout(() => setErrorToast(null), 3000);
+        return false;
+      }
+
+      const idempotencyKey = createIdempotencyKey(["use_item", redemptionId, now()]);
+      const updatedWallet = await applyWalletDelta("maintenance_reward", 0, 0, "reward", reward.id, idempotencyKey, healthDelta);
+      
+      const isInstant = reward.durationMinutes === 0;
+      const updatedRedemption = { 
+        ...redemption, 
+        isUsed: isInstant, 
+        activatedAt: now(),
+        usedAt: isInstant ? now() : undefined
+      };
+      
+      await db.redemptions.put(updatedRedemption);
+      await addMutationRecord("reward_redemption", redemptionId, "update", updatedRedemption);
+      
+      setWallet(updatedWallet);
+      await refresh();
+      return true;
+    },
+    [refresh, wallet]
+  );
+
+  const completeInventoryItem = useCallback(
+    async (redemptionId: string) => {
+      const redemption = await db.redemptions.get(redemptionId);
+      if (!redemption) return;
+      const updated = { ...redemption, isUsed: true, usedAt: now() };
+      await db.redemptions.put(updated);
+      await addMutationRecord("reward_redemption", redemptionId, "update", updated);
+      await refresh();
+    },
+    [refresh]
   );
 
   const sendAiCommand = useCallback(async (message: string) => {
@@ -363,7 +434,7 @@ export function useLevelUpStore() {
 
     if (mutations && mutations.length > 0) {
       try {
-        await db.transaction("rw", db.habits, db.rewards, db.syncMutations, async () => {
+        await db.transaction("rw", db.habits, db.rewards, db.syncMutations, db.wallet, async () => {
           for (const m of mutations) {
             if (m.type === "UPDATE_DIFFICULTY") {
               const allHabits = await db.habits.toArray();
@@ -394,11 +465,10 @@ export function useLevelUpStore() {
               const isQuit = m.payload.kind === "quit";
               
               const normalizedTime = tgtUnit.includes("min") ? tgtCount : (tgtCount * 10);
-              const baseCoin = Math.max(1, Math.floor(normalizedTime / 2));
-              const kindMultiplier = isQuit ? 2 : 1; 
+              const baseCoin = isQuit ? 30 : Math.max(1, Math.floor(normalizedTime / 2));
               
-              const calcCoin = Math.round(baseCoin * multipliers[diff] * kindMultiplier);
-              const calcXp = Math.round(baseCoin * 2.5 * multipliers[diff] * kindMultiplier);
+              const calcCoin = Math.round(baseCoin * multipliers[diff]);
+              const calcXp = Math.round(baseCoin * 2.5 * multipliers[diff]);
 
               const newHabit: Habit = {
                 id: createId("habit"),
@@ -478,6 +548,8 @@ export function useLevelUpStore() {
     completeHabit,
     createHabit,
     redeemReward,
+    useInventoryItem,
+    completeInventoryItem,
     sendAiCommand,
   };
 }
