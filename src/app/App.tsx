@@ -593,7 +593,7 @@ function RewardsView({ rewards, redemptions, coins, onRedeem, onUseItem, onCompl
             <h2>{reward.title}</h2>
             <p>{reward.description}</p>
           </div>
-          <button className="coin-button" onClick={() => setConfirmState({ isOpen: true, type: "buy", reward })}>
+          <button className="coin-button" disabled={coins < reward.costCoins} onClick={() => setConfirmState({ isOpen: true, type: "buy", reward })}>
             {reward.costCoins}
           </button>
         </article>

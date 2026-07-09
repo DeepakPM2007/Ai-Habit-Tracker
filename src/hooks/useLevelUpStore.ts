@@ -318,10 +318,11 @@ export function useLevelUpStore() {
   const redeemReward = useCallback(
     async (reward: Reward) => {
       const current = (await db.wallet.get("local")) ?? wallet;
-      // TEMPORARILY DISABLED COIN CHECK SO USER CAN TEST EXPENSIVE ITEMS
-      // if (current.coins < reward.costCoins) {
-      //   return false;
-      // }
+      if (current.coins < reward.costCoins) {
+        setErrorToast("Not enough coins!");
+        setTimeout(() => setErrorToast(null), 3000);
+        return false;
+      }
       
       const allRedemptions = await db.redemptions.where("rewardId").equals(reward.id).toArray();
       const isHighCost = reward.costCoins >= 500;
