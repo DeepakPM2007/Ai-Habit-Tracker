@@ -300,6 +300,48 @@ export function useLevelUpStore() {
             };
             await db.rewards.add(newReward);
             await addMutationRecord("reward", newReward.id, "create", newReward);
+          } else if (m.type === "ADD_HABIT") {
+            const multipliers: Record<string, number> = { easy: 1, medium: 1.6, hard: 2.2, heroic: 3 };
+            const diff = m.payload.difficulty || "medium";
+            const newHabit: Habit = {
+              id: createId("habit"),
+              title: m.payload.title,
+              description: m.payload.description || "Created by AI",
+              kind: m.payload.kind || "build",
+              difficulty: diff,
+              cadence: m.payload.cadence || "daily",
+              targetCount: m.payload.targetCount || 1,
+              targetUnit: m.payload.targetUnit || "session",
+              coinReward: Math.round(6 * multipliers[diff]),
+              xpReward: Math.round(14 * multipliers[diff]),
+              healthPenalty: (m.payload.kind === "quit") ? Math.round(5 * multipliers[diff]) : 3,
+              color: (m.payload.kind === "quit") ? "#d95d39" : "#4fb286",
+              currentStreak: 0,
+              bestStreak: 0,
+              nextDueDate: toDateKey(),
+              isActive: true,
+              createdAt: now(),
+              updatedAt: now()
+            };
+            await db.habits.add(newHabit);
+            await addMutationRecord("habit", newHabit.id, "create", newHabit);
+          } else if (m.type === "ALTER_HABIT") {
+            const allHabits = await db.habits.toArray();
+            const targetTitle = m.payload.targetTitle.toLowerCase();
+            const habit = allHabits.find(h => h.title.toLowerCase().includes(targetTitle));
+            if (habit) {
+              const updated = { ...habit, ...m.payload.changes, updatedAt: now() };
+              await db.habits.put(updated);
+              await addMutationRecord("habit", habit.id, "update", updated);
+            }
+          } else if (m.type === "DELETE_HABIT") {
+            const allHabits = await db.habits.toArray();
+            const targetTitle = m.payload.targetTitle.toLowerCase();
+            const habit = allHabits.find(h => h.title.toLowerCase().includes(targetTitle));
+            if (habit) {
+              await db.habits.delete(habit.id);
+              await addMutationRecord("habit", habit.id, "delete", null);
+            }
           }
         }
       });

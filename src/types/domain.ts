@@ -135,7 +135,7 @@ export interface AiScheduleAdjustment {
 }
 
 export interface AppMutation {
-  type: "ADD_REWARD" | "UPDATE_DIFFICULTY";
+  type: "ADD_REWARD" | "UPDATE_DIFFICULTY" | "ADD_HABIT" | "ALTER_HABIT" | "DELETE_HABIT";
   payload: any;
 }
 
