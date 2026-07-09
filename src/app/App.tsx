@@ -22,7 +22,39 @@ function Icon({ path }: { path: string }) {
   );
 }
 
+import React from "react";
+
+class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: any}> {
+  constructor(props: {children: React.ReactNode}) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ color: 'red', padding: '20px', background: 'white' }}>
+          <h1>Something went wrong.</h1>
+          <pre>{this.state.error?.message}</pre>
+          <pre>{this.state.error?.stack}</pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function App() {
+  return (
+    <ErrorBoundary>
+      <InnerApp />
+    </ErrorBoundary>
+  );
+}
+
+function InnerApp() {
   const store = useLevelUpStore();
   const [activeTab, setActiveTab] = useState<TabKey>("today");
 
@@ -109,44 +141,69 @@ function OnboardingView({ onComplete }: { onComplete: (name: string, age: number
   const [step, setStep] = useState(1);
   const [name, setName] = useState("");
   const [age, setAge] = useState("");
-  const [b1, setB1] = useState("");
-  const [b2, setB2] = useState("");
-  const [q1, setQ1] = useState("");
+  
+  const [b1Title, setB1Title] = useState("");
+  const [b1Time, setB1Time] = useState("10");
+  
+  const [b2Title, setB2Title] = useState("");
+  const [b2Time, setB2Time] = useState("10");
+
+  const [q1Title, setQ1Title] = useState("");
+  const [q1Time, setQ1Time] = useState("10");
 
   const handleNext = () => setStep(step + 1);
 
   const finish = () => {
     const defaultDiff = "medium" as Difficulty;
     const habits: Habit[] = [];
-    const makeHabit = (title: string, kind: HabitKind) => ({
-      id: createId("habit"),
-      title,
-      description: "My starting habit",
-      kind,
-      difficulty: defaultDiff,
-      cadence: "daily" as const,
-      targetCount: 1,
-      targetUnit: "session",
-      coinReward: 10,
-      xpReward: 20,
-      healthPenalty: 5,
-      color: kind === "quit" ? "#d95d39" : "#4fb286",
-      currentStreak: 0,
-      bestStreak: 0,
-      nextDueDate: toDateKey(),
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    if (b1.trim()) habits.push(makeHabit(b1, "build"));
-    if (b2.trim()) habits.push(makeHabit(b2, "build"));
-    if (q1.trim()) habits.push(makeHabit(q1, "quit"));
+    
+    // Quick helper to calc coins like we do in useLevelUpStore
+    const calcRewards = (kind: string, timeStr: string, diff: string) => {
+      const time = parseInt(timeStr, 10) || 10;
+      const baseCoin = Math.max(1, Math.floor(time / 2));
+      const kindMultiplier = kind === "quit" ? 2 : 1; 
+      const multipliers: Record<string, number> = { easy: 1, medium: 1.6, hard: 2.2, heroic: 3 };
+      const m = multipliers[diff];
+      return {
+        coin: Math.round(baseCoin * m * kindMultiplier),
+        xp: Math.round(baseCoin * 2.5 * m * kindMultiplier),
+        hpPenalty: kind === "quit" ? Math.round(5 * m) : 3,
+      };
+    };
+
+    const makeHabit = (title: string, kind: HabitKind, time: string) => {
+      const r = calcRewards(kind, time, defaultDiff);
+      return {
+        id: createId("habit"),
+        title,
+        description: "My starting habit",
+        kind,
+        difficulty: defaultDiff,
+        cadence: "daily" as const,
+        targetCount: parseInt(time, 10) || 10,
+        targetUnit: "minutes",
+        coinReward: r.coin,
+        xpReward: r.xp,
+        healthPenalty: r.hpPenalty,
+        color: kind === "quit" ? "#d95d39" : "#4fb286",
+        currentStreak: 0,
+        bestStreak: 0,
+        nextDueDate: toDateKey(),
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    };
+
+    if (b1Title.trim()) habits.push(makeHabit(b1Title, "build", b1Time));
+    if (b2Title.trim()) habits.push(makeHabit(b2Title, "build", b2Time));
+    if (q1Title.trim()) habits.push(makeHabit(q1Title, "quit", q1Time));
 
     onComplete(name || "Player", parseInt(age) || 18, habits);
   };
 
   return (
-    <div className="app-shell" style={{ justifyContent: "center", alignItems: "center", padding: "20px" }}>
+    <div className="app-shell" style={{ display: "flex", justifyContent: "center", alignItems: "center", padding: "20px" }}>
       <div className="onboarding-card">
         {step === 1 && (
           <>
@@ -161,8 +218,14 @@ function OnboardingView({ onComplete }: { onComplete: (name: string, age: number
           <>
             <h2>Choose 2 Habits to Build</h2>
             <p>What are two things you want to do every day?</p>
-            <input placeholder="E.g., Read 10 pages" value={b1} onChange={e => setB1(e.target.value)} />
-            <input placeholder="E.g., Drink 2L of water" value={b2} onChange={e => setB2(e.target.value)} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 100px", gap: "8px", marginBottom: "8px" }}>
+              <input placeholder="Habit 1 (e.g. Reading)" value={b1Title} onChange={e => setB1Title(e.target.value)} style={{ margin: 0 }} />
+              <input type="number" placeholder="Mins" value={b1Time} onChange={e => setB1Time(e.target.value)} style={{ margin: 0 }} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 100px", gap: "8px", marginBottom: "16px" }}>
+              <input placeholder="Habit 2 (e.g. Workout)" value={b2Title} onChange={e => setB2Title(e.target.value)} style={{ margin: 0 }} />
+              <input type="number" placeholder="Mins" value={b2Time} onChange={e => setB2Time(e.target.value)} style={{ margin: 0 }} />
+            </div>
             <button className="primary-action" onClick={handleNext}>Next</button>
           </>
         )}
@@ -170,7 +233,10 @@ function OnboardingView({ onComplete }: { onComplete: (name: string, age: number
           <>
             <h2>Choose 1 Habit to Quit</h2>
             <p>What is one thing you want to stop doing?</p>
-            <input placeholder="E.g., Doomscrolling" value={q1} onChange={e => setQ1(e.target.value)} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 100px", gap: "8px", marginBottom: "16px" }}>
+              <input placeholder="Bad Habit (e.g. Doomscrolling)" value={q1Title} onChange={e => setQ1Title(e.target.value)} style={{ margin: 0 }} />
+              <input type="number" placeholder="Mins/day" value={q1Time} onChange={e => setQ1Time(e.target.value)} style={{ margin: 0 }} />
+            </div>
             <button className="primary-action" onClick={finish}>Start My Journey</button>
           </>
         )}
@@ -341,24 +407,45 @@ function AiCommandView({
   }
 
   const quickActions = [
-    { label: "➕ Add Habit", template: "Add a habit to ..." },
-    { label: "✏️ Alter Habit", template: "Alter the habit called ... to easy" },
-    { label: "🗑️ Delete Habit", template: "Delete the habit called ..." },
+    { label: "➕ Add", template: "Add a habit to [read] for [30] minutes on [medium] difficulty" },
+    { label: "✏️ Alter", template: "Alter the habit called [...] to heroic" },
+    { label: "🗑️ Delete", template: "Delete the habit called [...]" },
   ];
 
   return (
     <section className="stack">
-      <SectionTitle title="AI Command Center" detail="Manage your app" />
-      <div className="planner-panel">
-        <div className="quick-actions">
-          {quickActions.map(a => (
-            <button key={a.label} className="quick-chip" onClick={() => setMessage(a.template)}>{a.label}</button>
-          ))}
-        </div>
-        <div className="ai-chat-history">
+      <SectionTitle title="AI Command Center" detail="Manage your app seamlessly" />
+      <div className="planner-panel" style={{ padding: "12px", background: "rgba(30, 41, 59, 0.4)" }}>
+        
+        <div className="ai-chat-history" style={{ minHeight: "350px" }}>
           {commandHistory.length === 0 ? (
-            <div className="empty-state" style={{ padding: "10px" }}>
-              <p>Select a quick action above or type a command naturally.</p>
+            <div className="empty-state" style={{ padding: "30px 10px", border: "none", background: "transparent" }}>
+              <h3 style={{ marginBottom: "16px", color: "var(--fg)" }}>How can I help you level up?</h3>
+              <p style={{ marginBottom: "20px" }}>I can manage your entire quest log. Just ask me!</p>
+              
+              <div style={{ display: "grid", gap: "10px", textAlign: "left" }}>
+                {quickActions.map(a => (
+                  <button 
+                    key={a.label} 
+                    onClick={() => setMessage(a.template)}
+                    style={{ 
+                      padding: "16px", 
+                      borderRadius: "12px", 
+                      background: "rgba(255,255,255,0.05)",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      color: "#fff",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "12px",
+                      transition: "0.2s"
+                    }}
+                  >
+                    <strong style={{ fontSize: "16px" }}>{a.label}</strong>
+                    <span style={{ color: "var(--muted)", fontSize: "13px" }}>{a.template}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             commandHistory.map((msg) => (
@@ -368,15 +455,16 @@ function AiCommandView({
             ))
           )}
         </div>
-        <form onSubmit={handleSubmit} style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+        <form onSubmit={handleSubmit} style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
           <input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="Tell the AI what to do..."
+            placeholder="Tell me what you want to do..."
             required
             autoComplete="off"
+            style={{ borderRadius: "100px", padding: "0 24px" }}
           />
-          <button type="submit" className="primary-action" style={{ width: "80px", minHeight: "100%" }}>Send</button>
+          <button type="submit" className="primary-action" style={{ width: "64px", minHeight: "48px", borderRadius: "100px" }}>Send</button>
         </form>
       </div>
     </section>

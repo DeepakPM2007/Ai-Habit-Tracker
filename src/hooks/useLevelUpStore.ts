@@ -17,6 +17,8 @@ import type {
 import { addDays, isDueTodayOrEarlier, toDateKey } from "../utils/dates";
 import { createId, createIdempotencyKey } from "../utils/id";
 import { levelFromXp } from "../utils/leveling";
+import confetti from "canvas-confetti";
+import { playAddictiveDing } from "../utils/audio";
 
 const now = () => new Date().toISOString();
 
@@ -229,6 +231,16 @@ export function useLevelUpStore() {
         await addMutationRecord("habit", habit.id, "update", nextHabit);
       });
 
+      if (finalStatus === "completed" || finalStatus === "resisted") {
+        playAddictiveDing();
+        confetti({
+          particleCount: 100,
+          spread: 70,
+          origin: { y: 0.6 },
+          colors: habit.kind === "quit" ? ['#f87171', '#ef4444', '#fbbf24'] : ['#34d399', '#10b981', '#fbbf24']
+        });
+      }
+
       await refresh();
     },
     [online, refresh, wallet],
@@ -263,13 +275,22 @@ export function useLevelUpStore() {
   const createHabit = useCallback(
     async (input: Pick<Habit, "title" | "description" | "kind" | "difficulty" | "targetCount" | "targetUnit">) => {
       const multipliers = { easy: 1, medium: 1.6, hard: 2.2, heroic: 3 };
+      
+      // Calculate reward based on time/count. Assume minimum base of 10 if unit is "session" or low count.
+      const normalizedTime = input.targetUnit.includes("min") ? input.targetCount : (input.targetCount * 10);
+      const baseCoin = Math.max(1, Math.floor(normalizedTime / 2));
+      const kindMultiplier = input.kind === "quit" ? 2 : 1; // Double points for breaking bad habits
+      
+      const calcCoin = Math.round(baseCoin * multipliers[input.difficulty] * kindMultiplier);
+      const calcXp = Math.round(baseCoin * 2.5 * multipliers[input.difficulty] * kindMultiplier);
+
       const createdAt = now();
       const habit: Habit = {
         id: createId("habit"),
         ...input,
         cadence: "daily",
-        coinReward: Math.round(6 * multipliers[input.difficulty]),
-        xpReward: Math.round(14 * multipliers[input.difficulty]),
+        coinReward: calcCoin,
+        xpReward: calcXp,
         healthPenalty: input.kind === "quit" ? Math.round(5 * multipliers[input.difficulty]) : 3,
         color: input.kind === "quit" ? "#d95d39" : "#4fb286",
         currentStreak: 0,
@@ -367,6 +388,18 @@ export function useLevelUpStore() {
             } else if (m.type === "ADD_HABIT") {
               const multipliers: Record<string, number> = { easy: 1, medium: 1.6, hard: 2.2, heroic: 3 };
               const diff = m.payload.difficulty || "medium";
+              
+              const tgtCount = m.payload.targetCount || 10;
+              const tgtUnit = m.payload.targetUnit || "minutes";
+              const isQuit = m.payload.kind === "quit";
+              
+              const normalizedTime = tgtUnit.includes("min") ? tgtCount : (tgtCount * 10);
+              const baseCoin = Math.max(1, Math.floor(normalizedTime / 2));
+              const kindMultiplier = isQuit ? 2 : 1; 
+              
+              const calcCoin = Math.round(baseCoin * multipliers[diff] * kindMultiplier);
+              const calcXp = Math.round(baseCoin * 2.5 * multipliers[diff] * kindMultiplier);
+
               const newHabit: Habit = {
                 id: createId("habit"),
                 title: m.payload.title,
@@ -374,12 +407,12 @@ export function useLevelUpStore() {
                 kind: m.payload.kind || "build",
                 difficulty: diff,
                 cadence: m.payload.cadence || "daily",
-                targetCount: m.payload.targetCount || 1,
-                targetUnit: m.payload.targetUnit || "session",
-                coinReward: Math.round(6 * multipliers[diff]),
-                xpReward: Math.round(14 * multipliers[diff]),
-                healthPenalty: (m.payload.kind === "quit") ? Math.round(5 * multipliers[diff]) : 3,
-                color: (m.payload.kind === "quit") ? "#d95d39" : "#4fb286",
+                targetCount: tgtCount,
+                targetUnit: tgtUnit,
+                coinReward: calcCoin,
+                xpReward: calcXp,
+                healthPenalty: isQuit ? Math.round(5 * multipliers[diff]) : 3,
+                color: isQuit ? "#d95d39" : "#4fb286",
                 currentStreak: 0,
                 bestStreak: 0,
                 nextDueDate: toDateKey(),

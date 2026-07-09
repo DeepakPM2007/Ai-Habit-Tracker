@@ -1,11 +1,24 @@
 import type { AppMutation } from "../../types/domain";
 
+const PRAISE_PHRASES = [
+  "You're going to crush it! 🔥",
+  "Awesome choice, I love this for you! 💯",
+  "Let's get those gains! 💪",
+  "This is how you level up in real life! 🚀",
+  "Brilliant! I'm adding this to your quest log right now. ✨",
+  "You're an absolute legend for doing this! 👑"
+];
+
+function getRandomPraise() {
+  return PRAISE_PHRASES[Math.floor(Math.random() * PRAISE_PHRASES.length)];
+}
+
 // A sophisticated local heuristic NLP engine for parsing offline commands.
 class LocalNlpEngine {
   parse(command: string): { reply: string; mutations: AppMutation[] } {
     const text = command.toLowerCase();
     const mutations: AppMutation[] = [];
-    let reply = "I heard you, but I couldn't quite figure out what you want me to do.";
+    let reply = "I heard you, but I couldn't quite figure out what you want me to do. Want me to add, alter, or delete a habit?";
 
     // 1. ADD HABIT Intent
     if (/(add|create|new|start|make).+habit/i.test(text) || /habit\s+(to|for|of)\s+/i.test(text)) {
@@ -17,20 +30,20 @@ class LocalNlpEngine {
 
       // Extract a plausible title
       let title = "New AI Habit";
-      const match = text.match(/(?:habit to|habit for|habit of|habit called|new habit)\s+([a-z0-9\s]+?)(?:\s+(with|that|which|and|easy|medium|hard|heroic)|$)/i);
+      const match = text.match(/(?:habit to|habit for|habit of|habit called|new habit|start a habit to)\s+([a-z0-9\s]+?)(?:\s+(with|that|which|and|for|easy|medium|hard|heroic)|$)/i);
       if (match && match[1]) {
         title = match[1].trim();
-        // Capitalize first letter
         title = title.charAt(0).toUpperCase() + title.slice(1);
       }
 
       // Extract numbers for target count
-      let targetCount = 1;
-      let targetUnit = "session";
-      const countMatch = text.match(/(\d+)\s+(times|pages|minutes|hours|km|miles|sessions|chapters)/i);
+      let targetCount = 10; // Default to 10 minutes if not specified
+      let targetUnit = "minutes";
+      const countMatch = text.match(/(\d+)\s+(times|pages|minutes|mins|hours|km|miles|sessions|chapters)/i);
       if (countMatch) {
         targetCount = parseInt(countMatch[1], 10);
         targetUnit = countMatch[2];
+        if (targetUnit === "mins") targetUnit = "minutes";
       }
 
       mutations.push({
@@ -44,7 +57,7 @@ class LocalNlpEngine {
           description: "Created dynamically by your AI Assistant."
         }
       });
-      reply = `I've created a new ${diff} habit for you: "${title}"!`;
+      reply = `I've created a new ${diff} habit for you: "${title}" for ${targetCount} ${targetUnit}! ${getRandomPraise()}`;
     }
 
     // 2. DELETE HABIT Intent
@@ -56,7 +69,9 @@ class LocalNlpEngine {
           type: "DELETE_HABIT",
           payload: { targetTitle }
         });
-        reply = `I will delete any habit matching "${targetTitle}".`;
+        reply = `Got it! I will delete any habit matching "${targetTitle}". Keeping the quest log clean! 🧹`;
+      } else {
+        reply = "I see you want to delete a habit, but you didn't tell me the name. Say 'delete habit called [name]'.";
       }
     }
 
@@ -77,33 +92,10 @@ class LocalNlpEngine {
           type: "ALTER_HABIT",
           payload: { targetTitle, changes }
         });
-        reply = `I've updated the habit matching "${targetTitle}".`;
+        reply = `Done! I've updated the habit matching "${targetTitle}". You're adapting and improving! 🌟`;
       } else {
         reply = "I see you want to alter a habit, but try formatting it like: 'alter habit [name] to [new difficulty]'.";
       }
-    }
-
-    // 4. FALLBACK: Original Rewards and App-wide Difficulty commands
-    else if (text.includes("make") && text.includes("heroic")) {
-      mutations.push({
-        type: "UPDATE_DIFFICULTY",
-        payload: { target: "all", newDifficulty: "heroic" }
-      });
-      reply = "All your habits have been upgraded to Heroic difficulty! Good luck.";
-    } 
-    
-    else if (text.includes("add") && text.includes("reward") && text.includes("donut")) {
-      mutations.push({
-        type: "ADD_REWARD",
-        payload: {
-          title: "Eat a donut",
-          description: "A sweet treat from the AI.",
-          costCoins: 50,
-          durationMinutes: 10,
-          category: "food"
-        }
-      });
-      reply = "Added a Donut reward. You earned it!";
     }
 
     return { reply, mutations };
