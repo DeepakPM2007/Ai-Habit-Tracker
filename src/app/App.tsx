@@ -120,6 +120,7 @@ function InnerApp() {
             redemptions={store.redemptions.length}
             pendingCount={store.pendingMutations.length}
             checkins={store.checkins}
+            onResetApp={store.resetApp}
           />
         )}
       </main>
@@ -606,12 +607,14 @@ function ProfileView({
   wallet,
   redemptions,
   pendingCount,
-  checkins
+  checkins,
+  onResetApp
 }: {
-  wallet: any;
+  wallet: Wallet;
   redemptions: number;
   pendingCount: number;
-  checkins: any[];
+  checkins: Checkin[];
+  onResetApp: () => void;
 }) {
   const stats = useMemo(
     () => [
@@ -671,9 +674,12 @@ function ProfileView({
         </div>
       )}
 
-      <div className="architecture-note">
-        <h2>Offline-first architecture</h2>
-        <p>Your AI perfectly understands intents entirely locally inside a Web Worker. No servers, no latency, no subscription fees. It's completely free forever.</p>
+      <div className="architecture-note" style={{ marginTop: "32px", border: "1px solid #ff4d4d", background: "rgba(255, 77, 77, 0.05)" }}>
+        <h2 style={{ color: "#ff4d4d" }}>Danger Zone</h2>
+        <p>This will completely wipe your local database and unregister the service worker.</p>
+        <button className="coin-button" style={{ background: "#ff4d4d", color: "white", marginTop: "16px" }} onClick={onResetApp}>
+          Erase All Data & Reset
+        </button>
       </div>
     </section>
   );

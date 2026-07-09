@@ -531,6 +531,19 @@ export function useLevelUpStore() {
     setAiCommandHistory(prev => [...prev, systemMsg]);
   }, [refresh]);
 
+  const resetApp = useCallback(async () => {
+    if (confirm("Are you sure you want to permanently delete all local data? This cannot be undone!")) {
+      await db.delete();
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (let registration of registrations) {
+          await registration.unregister();
+        }
+      }
+      window.location.reload();
+    }
+  }, []);
+
   return {
     loading,
     startupError,
@@ -552,5 +565,6 @@ export function useLevelUpStore() {
     useInventoryItem,
     completeInventoryItem,
     sendAiCommand,
+    resetApp,
   };
 }
