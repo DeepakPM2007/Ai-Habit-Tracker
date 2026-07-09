@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Level Up icon">
+  <rect width="512" height="512" rx="112" fill="#101820"/>
+  <path d="M256 94 392 230h-72v138H192V230h-72L256 94Z" fill="#f2c14e"/>
+  <path d="M188 394h136" stroke="#e7efe7" stroke-width="30" stroke-linecap="round"/>
+  <circle cx="366" cy="134" r="24" fill="#4fb286"/>
+</svg>
