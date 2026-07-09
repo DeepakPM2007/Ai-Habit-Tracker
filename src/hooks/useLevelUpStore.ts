@@ -41,6 +41,7 @@ export function useLevelUpStore() {
   const [redemptions, setRedemptions] = useState<RewardRedemption[]>([]);
   const [pendingMutations, setPendingMutations] = useState<SyncMutation[]>([]);
   const [aiCommandHistory, setAiCommandHistory] = useState<AiCommandMessage[]>([]);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const [habitRows, checkinRows, walletRow, rewardRows, redemptionRows, mutations] = await Promise.all([
@@ -121,6 +122,7 @@ export function useLevelUpStore() {
     sourceType: WalletTransaction["sourceType"],
     sourceId: string,
     idempotencyKey: string,
+    healthDeltaAmount: number = 1
   ) => {
     const existing = await db.transactions.where("idempotencyKey").equals(idempotencyKey).first();
     if (existing) {
@@ -129,13 +131,27 @@ export function useLevelUpStore() {
 
     const current = (await db.wallet.get("local")) ?? wallet;
     const nextLifetimeXp = Math.max(0, current.lifetimeXp + xpDelta);
+    
+    // Health penalty logic
+    let newHealth = current.health + (type === "reward_purchase" ? 0 : healthDeltaAmount);
+    let newLevel = levelFromXp(nextLifetimeXp);
+    
+    if (newHealth <= 0) {
+      if (newLevel > 1) {
+        newLevel -= 1; // Drop one level
+      }
+      newHealth = 100; // Reset health
+    } else if (newHealth > 100) {
+      newHealth = 100;
+    }
+
     const updated: Wallet = {
       ...current,
       coins: Math.max(0, current.coins + coinsDelta),
       lifetimeCoins: coinsDelta > 0 ? current.lifetimeCoins + coinsDelta : current.lifetimeCoins,
       lifetimeXp: nextLifetimeXp,
-      level: levelFromXp(nextLifetimeXp),
-      health: Math.max(0, Math.min(100, current.health + (type === "reward_purchase" ? 0 : 1))),
+      level: newLevel,
+      health: newHealth,
       updatedAt: now(),
     };
 
@@ -176,7 +192,7 @@ export function useLevelUpStore() {
         valueCompleted: finalStatus === "maintenance" ? 1 : habit.targetCount,
         coinsDelta: finalStatus === "maintenance" ? Math.max(1, Math.floor(habit.coinReward * 0.35)) : habit.coinReward,
         xpDelta: finalStatus === "maintenance" ? Math.max(3, Math.floor(habit.xpReward * 0.35)) : habit.xpReward,
-        healthDelta: 1,
+        healthDelta: 1, // Will be overridden if failed
         createdAt,
         syncStatus: online ? "synced" : "pending",
       };
@@ -189,6 +205,14 @@ export function useLevelUpStore() {
         updatedAt: createdAt,
       };
 
+      // If user failed a quit habit, health penalty is negative
+      let healthDeltaAmount = 1; 
+      if (habit.kind === "quit" && finalStatus === "resisted") {
+        healthDeltaAmount = 1; // Good
+      } else if (habit.kind === "quit" && finalStatus !== "resisted") {
+        healthDeltaAmount = -habit.healthPenalty;
+      }
+
       await db.transaction("rw", db.habits, db.checkins, db.wallet, db.transactions, db.syncMutations, async () => {
         await db.checkins.add(checkin);
         await db.habits.put(nextHabit);
@@ -199,6 +223,7 @@ export function useLevelUpStore() {
           "habit",
           habit.id,
           idempotencyKey,
+          healthDeltaAmount
         );
         await addMutationRecord("checkin", checkin.id, "create", checkin);
         await addMutationRecord("habit", habit.id, "update", nextHabit);
@@ -208,6 +233,32 @@ export function useLevelUpStore() {
     },
     [online, refresh, wallet],
   );
+
+  const setProfile = useCallback(async (name: string, age: number, initialHabits: Habit[]) => {
+    const updatedWallet = { ...wallet, name, age, updatedAt: now() };
+    await db.wallet.put(updatedWallet);
+    for (const h of initialHabits) {
+      await db.habits.add(h);
+    }
+    await refresh();
+  }, [wallet, refresh]);
+
+  const checkHabitConstraints = async (newHabits: Habit[], isUpdating: boolean = false) => {
+    const all = await db.habits.toArray();
+    const active = all.filter(h => h.isActive);
+    
+    // Check total count limit
+    if (!isUpdating && active.length + newHabits.length > 20) {
+      throw new Error("Cannot have more than 20 active habits.");
+    }
+    
+    // Check Heroic limit
+    const existingHeroic = active.filter(h => h.difficulty === "heroic").length;
+    const newHeroic = newHabits.filter(h => h.difficulty === "heroic").length;
+    if (existingHeroic + newHeroic > 2) {
+      throw new Error("Cannot have more than 2 Heroic habits at the same time.");
+    }
+  };
 
   const createHabit = useCallback(
     async (input: Pick<Habit, "title" | "description" | "kind" | "difficulty" | "targetCount" | "targetUnit">) => {
@@ -229,9 +280,15 @@ export function useLevelUpStore() {
         updatedAt: createdAt,
       };
 
-      await db.habits.add(habit);
-      await addMutationRecord("habit", habit.id, "create", habit);
-      await refresh();
+      try {
+        await checkHabitConstraints([habit]);
+        await db.habits.add(habit);
+        await addMutationRecord("habit", habit.id, "create", habit);
+        await refresh();
+      } catch (err: any) {
+        setErrorToast(err.message);
+        setTimeout(() => setErrorToast(null), 3000);
+      }
     },
     [refresh],
   );
@@ -242,9 +299,14 @@ export function useLevelUpStore() {
       if (current.coins < reward.costCoins) {
         return false;
       }
+      
+      let healthDelta = 0;
+      if (reward.title.includes("Small Recovery")) healthDelta = 20;
+      if (reward.title.includes("Medium Recovery")) healthDelta = 50;
+      if (reward.title.includes("Large Recovery")) healthDelta = 100;
 
       const idempotencyKey = createIdempotencyKey(["reward", reward.id, now()]);
-      const transactionWallet = await applyWalletDelta("reward_purchase", -reward.costCoins, 0, "reward", reward.id, idempotencyKey);
+      const transactionWallet = await applyWalletDelta("reward_purchase", -reward.costCoins, 0, "reward", reward.id, idempotencyKey, healthDelta);
       const txn = await db.transactions.where("idempotencyKey").equals(idempotencyKey).first();
       if (!txn) {
         return false;
@@ -276,82 +338,89 @@ export function useLevelUpStore() {
     setAiCommandHistory(prev => [...prev, userMsg]);
 
     const { reply, mutations } = await aiClient.sendCommand(message);
+    let finalReply = reply;
 
     if (mutations && mutations.length > 0) {
-      await db.transaction("rw", db.habits, db.rewards, db.syncMutations, async () => {
-        for (const m of mutations) {
-          if (m.type === "UPDATE_DIFFICULTY") {
-            const allHabits = await db.habits.toArray();
-            for (const h of allHabits) {
-              const updated = { ...h, difficulty: m.payload.newDifficulty, updatedAt: now() };
-              await db.habits.put(updated);
-              await addMutationRecord("habit", h.id, "update", updated);
-            }
-          } else if (m.type === "ADD_REWARD") {
-            const newReward: Reward = {
-              id: createId("reward"),
-              title: m.payload.title,
-              description: m.payload.description,
-              costCoins: m.payload.costCoins,
-              durationMinutes: m.payload.durationMinutes,
-              category: m.payload.category,
-              isActive: true,
-              createdAt: now()
-            };
-            await db.rewards.add(newReward);
-            await addMutationRecord("reward", newReward.id, "create", newReward);
-          } else if (m.type === "ADD_HABIT") {
-            const multipliers: Record<string, number> = { easy: 1, medium: 1.6, hard: 2.2, heroic: 3 };
-            const diff = m.payload.difficulty || "medium";
-            const newHabit: Habit = {
-              id: createId("habit"),
-              title: m.payload.title,
-              description: m.payload.description || "Created by AI",
-              kind: m.payload.kind || "build",
-              difficulty: diff,
-              cadence: m.payload.cadence || "daily",
-              targetCount: m.payload.targetCount || 1,
-              targetUnit: m.payload.targetUnit || "session",
-              coinReward: Math.round(6 * multipliers[diff]),
-              xpReward: Math.round(14 * multipliers[diff]),
-              healthPenalty: (m.payload.kind === "quit") ? Math.round(5 * multipliers[diff]) : 3,
-              color: (m.payload.kind === "quit") ? "#d95d39" : "#4fb286",
-              currentStreak: 0,
-              bestStreak: 0,
-              nextDueDate: toDateKey(),
-              isActive: true,
-              createdAt: now(),
-              updatedAt: now()
-            };
-            await db.habits.add(newHabit);
-            await addMutationRecord("habit", newHabit.id, "create", newHabit);
-          } else if (m.type === "ALTER_HABIT") {
-            const allHabits = await db.habits.toArray();
-            const targetTitle = m.payload.targetTitle.toLowerCase();
-            const habit = allHabits.find(h => h.title.toLowerCase().includes(targetTitle));
-            if (habit) {
-              const updated = { ...habit, ...m.payload.changes, updatedAt: now() };
-              await db.habits.put(updated);
-              await addMutationRecord("habit", habit.id, "update", updated);
-            }
-          } else if (m.type === "DELETE_HABIT") {
-            const allHabits = await db.habits.toArray();
-            const targetTitle = m.payload.targetTitle.toLowerCase();
-            const habit = allHabits.find(h => h.title.toLowerCase().includes(targetTitle));
-            if (habit) {
-              await db.habits.delete(habit.id);
-              await addMutationRecord("habit", habit.id, "delete", null);
+      try {
+        await db.transaction("rw", db.habits, db.rewards, db.syncMutations, async () => {
+          for (const m of mutations) {
+            if (m.type === "UPDATE_DIFFICULTY") {
+              const allHabits = await db.habits.toArray();
+              for (const h of allHabits) {
+                const updated = { ...h, difficulty: m.payload.newDifficulty, updatedAt: now() };
+                await db.habits.put(updated);
+                await addMutationRecord("habit", h.id, "update", updated);
+              }
+            } else if (m.type === "ADD_REWARD") {
+              const newReward: Reward = {
+                id: createId("reward"),
+                title: m.payload.title,
+                description: m.payload.description,
+                costCoins: m.payload.costCoins,
+                durationMinutes: m.payload.durationMinutes,
+                category: m.payload.category,
+                isActive: true,
+                createdAt: now()
+              };
+              await db.rewards.add(newReward);
+              await addMutationRecord("reward", newReward.id, "create", newReward);
+            } else if (m.type === "ADD_HABIT") {
+              const multipliers: Record<string, number> = { easy: 1, medium: 1.6, hard: 2.2, heroic: 3 };
+              const diff = m.payload.difficulty || "medium";
+              const newHabit: Habit = {
+                id: createId("habit"),
+                title: m.payload.title,
+                description: m.payload.description || "Created by AI",
+                kind: m.payload.kind || "build",
+                difficulty: diff,
+                cadence: m.payload.cadence || "daily",
+                targetCount: m.payload.targetCount || 1,
+                targetUnit: m.payload.targetUnit || "session",
+                coinReward: Math.round(6 * multipliers[diff]),
+                xpReward: Math.round(14 * multipliers[diff]),
+                healthPenalty: (m.payload.kind === "quit") ? Math.round(5 * multipliers[diff]) : 3,
+                color: (m.payload.kind === "quit") ? "#d95d39" : "#4fb286",
+                currentStreak: 0,
+                bestStreak: 0,
+                nextDueDate: toDateKey(),
+                isActive: true,
+                createdAt: now(),
+                updatedAt: now()
+              };
+              await checkHabitConstraints([newHabit]);
+              await db.habits.add(newHabit);
+              await addMutationRecord("habit", newHabit.id, "create", newHabit);
+            } else if (m.type === "ALTER_HABIT") {
+              const allHabits = await db.habits.toArray();
+              const targetTitle = m.payload.targetTitle.toLowerCase();
+              const habit = allHabits.find(h => h.title.toLowerCase().includes(targetTitle));
+              if (habit) {
+                const updated = { ...habit, ...m.payload.changes, updatedAt: now() };
+                await checkHabitConstraints([updated], true);
+                await db.habits.put(updated);
+                await addMutationRecord("habit", habit.id, "update", updated);
+              }
+            } else if (m.type === "DELETE_HABIT") {
+              const allHabits = await db.habits.toArray();
+              const targetTitle = m.payload.targetTitle.toLowerCase();
+              const habit = allHabits.find(h => h.title.toLowerCase().includes(targetTitle));
+              if (habit) {
+                await db.habits.delete(habit.id);
+                await addMutationRecord("habit", habit.id, "delete", null);
+              }
             }
           }
-        }
-      });
-      await refresh();
+        });
+        await refresh();
+      } catch (err: any) {
+        finalReply = `AI Error: ${err.message}`;
+      }
     }
 
     const systemMsg: AiCommandMessage = {
       id: createId("msg"),
       role: "system",
-      content: reply,
+      content: finalReply,
       timestamp: now(),
       mutations
     };
@@ -371,6 +440,8 @@ export function useLevelUpStore() {
     redemptions,
     pendingMutations,
     aiCommandHistory,
+    errorToast,
+    setProfile,
     completeHabit,
     createHabit,
     redeemReward,

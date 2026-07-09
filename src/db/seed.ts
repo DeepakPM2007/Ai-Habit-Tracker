@@ -1,9 +1,6 @@
 import { db } from "./dexieClient";
-import type { Goal, Habit, Reward, Wallet } from "../types/domain";
-import { addDays, toDateKey } from "../utils/dates";
+import type { Reward } from "../types/domain";
 import { createId } from "../utils/id";
-
-const now = () => new Date().toISOString();
 
 export async function seedInitialData() {
   const existingWallet = await db.wallet.get("local");
@@ -11,131 +8,76 @@ export async function seedInitialData() {
     return;
   }
 
-  const createdAt = now();
-  const goals: Goal[] = [
-    {
-      id: createId("goal"),
-      title: "Build a stronger student routine",
-      category: "growth",
-      status: "active",
-      createdAt,
-      updatedAt: createdAt,
-    },
-    {
-      id: createId("goal"),
-      title: "Reduce low-value screen time",
-      category: "focus",
-      status: "active",
-      createdAt,
-      updatedAt: createdAt,
-    },
-  ];
+  const createdAt = new Date().toISOString();
 
-  const today = toDateKey();
-  const habits: Habit[] = [
-    {
-      id: createId("habit"),
-      goalId: goals[0].id,
-      title: "Deep study block",
-      description: "Protect one focused study session before entertainment.",
-      kind: "build",
-      difficulty: "hard",
-      cadence: "daily",
-      targetCount: 45,
-      targetUnit: "minutes",
-      coinReward: 14,
-      xpReward: 35,
-      healthPenalty: 8,
-      color: "#4f7cac",
-      currentStreak: 4,
-      bestStreak: 9,
-      nextDueDate: today,
-      isActive: true,
-      createdAt,
-      updatedAt: createdAt,
-    },
-    {
-      id: createId("habit"),
-      goalId: goals[0].id,
-      title: "Read technical pages",
-      description: "Read a chapter, article, or documentation section.",
-      kind: "build",
-      difficulty: "medium",
-      cadence: "daily",
-      targetCount: 10,
-      targetUnit: "pages",
-      coinReward: 9,
-      xpReward: 20,
-      healthPenalty: 4,
-      color: "#4fb286",
-      currentStreak: 12,
-      bestStreak: 18,
-      nextDueDate: today,
-      isActive: true,
-      createdAt,
-      updatedAt: createdAt,
-    },
-    {
-      id: createId("habit"),
-      goalId: goals[1].id,
-      title: "No late-night scrolling",
-      description: "Resist social media after 10:30 PM.",
-      kind: "quit",
-      difficulty: "heroic",
-      cadence: "daily",
-      targetCount: 1,
-      targetUnit: "night resisted",
-      coinReward: 22,
-      xpReward: 60,
-      healthPenalty: 15,
-      color: "#d95d39",
-      currentStreak: 2,
-      bestStreak: 7,
-      nextDueDate: today,
-      isActive: true,
-      createdAt,
-      updatedAt: createdAt,
-    },
-    {
-      id: createId("habit"),
-      title: "Weekly reset",
-      description: "Plan the week, clear tasks, and choose one priority.",
-      kind: "build",
-      difficulty: "easy",
-      cadence: "weekly",
-      targetCount: 1,
-      targetUnit: "session",
-      coinReward: 12,
-      xpReward: 25,
-      healthPenalty: 0,
-      color: "#7b6d8d",
-      currentStreak: 1,
-      bestStreak: 4,
-      nextDueDate: addDays(today, 2),
-      isActive: true,
-      createdAt,
-      updatedAt: createdAt,
-    },
-  ];
-
-  const wallet: Wallet = {
+  await db.wallet.add({
     id: "local",
-    coins: 42,
-    lifetimeCoins: 120,
-    lifetimeXp: 280,
-    level: 2,
-    health: 88,
+    coins: 0,
+    lifetimeCoins: 0,
+    lifetimeXp: 0,
+    level: 1,
+    health: 100,
     updatedAt: createdAt,
-  };
+  });
 
   const rewards: Reward[] = [
     {
       id: createId("reward"),
-      title: "Gaming time",
-      description: "A guilt-free 45 minute session.",
-      costCoins: 35,
-      durationMinutes: 45,
+      title: "Dirty Video",
+      description: "A premium private reward.",
+      costCoins: 500,
+      durationMinutes: 30,
       category: "screen",
+      isActive: true,
+      createdAt,
+    },
+    {
+      id: createId("reward"),
+      title: "Small Recovery Potion",
+      description: "Restores a bit of health (+20%).",
+      costCoins: 50,
+      durationMinutes: 0,
+      category: "rest",
+      isActive: true,
+      createdAt,
+    },
+    {
+      id: createId("reward"),
+      title: "Medium Recovery Potion",
+      description: "Restores a decent amount of health (+50%).",
+      costCoins: 150,
+      durationMinutes: 0,
+      category: "rest",
+      isActive: true,
+      createdAt,
+    },
+    {
+      id: createId("reward"),
+      title: "Large Recovery Potion",
+      description: "Fully restores your health (100%).",
+      costCoins: 300,
+      durationMinutes: 0,
+      category: "rest",
+      isActive: true,
+      createdAt,
+    },
+    {
+      id: createId("reward"),
+      title: "XP Boost Hour",
+      description: "Double XP for the next hour (simulated).",
+      costCoins: 400,
+      durationMinutes: 60,
+      category: "custom",
+      isActive: true,
+      createdAt,
+    },
+    {
+      id: createId("reward"),
+      title: "Whole Day Skip",
+      description: "Skip an entire day's habits with no penalty.",
+      costCoins: 1000,
+      durationMinutes: 1440,
+      category: "rest",
       isActive: true,
       createdAt,
     },
@@ -148,33 +90,8 @@ export async function seedInitialData() {
       category: "screen",
       isActive: true,
       createdAt,
-    },
-    {
-      id: createId("reward"),
-      title: "Cheat meal",
-      description: "Treat yourself to whatever you're craving.",
-      costCoins: 120,
-      durationMinutes: 60,
-      category: "food",
-      isActive: true,
-      createdAt,
-    },
-    {
-      id: createId("reward"),
-      title: "Skip gym today",
-      description: "Take an impromptu rest day without guilt.",
-      costCoins: 250,
-      durationMinutes: 1440,
-      category: "rest",
-      isActive: true,
-      createdAt,
-    },
+    }
   ];
 
-  await db.transaction("rw", db.goals, db.habits, db.wallet, db.rewards, async () => {
-    await db.goals.bulkPut(goals);
-    await db.habits.bulkPut(habits);
-    await db.wallet.put(wallet);
-    await db.rewards.bulkPut(rewards);
-  });
+  await db.rewards.bulkAdd(rewards);
 }

@@ -301,6 +301,32 @@ button {
   transition: transform 0.2s, box-shadow 0.2s;
 }
 
+.onboarding-card {
+  background: var(--surface);
+  padding: 40px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  box-shadow: var(--glow);
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+}
+.onboarding-card h2 {
+  margin-bottom: 8px;
+  font-size: 24px;
+}
+.onboarding-card p {
+  color: var(--fg-muted);
+  margin-bottom: 24px;
+}
+.onboarding-card input {
+  margin-bottom: 16px;
+}
+.onboarding-card button {
+  width: 100%;
+  margin-top: 8px;
+}
+
 .habit-card:hover, .reward-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 8px 30px rgba(0,0,0,0.3);

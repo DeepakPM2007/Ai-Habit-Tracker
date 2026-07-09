@@ -1,8 +1,10 @@
 import { FormEvent, useMemo, useState } from "react";
-import type { AiCommandMessage, Difficulty, Habit, HabitKind, Reward, ScheduleAdjustment, TabKey } from "../types/domain";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import type { AiCommandMessage, Difficulty, Habit, HabitKind, Reward, TabKey } from "../types/domain";
 import { useLevelUpStore } from "../hooks/useLevelUpStore";
 import { formatShortDate, toDateKey } from "../utils/dates";
 import { levelProgress, xpForNextLevel } from "../utils/leveling";
+import { createId } from "../utils/id";
 
 const tabs: { key: TabKey; label: string; icon: string }[] = [
   { key: "today", label: "Today", icon: "M4 12h16M12 4v16" },
@@ -42,12 +44,18 @@ export function App() {
     );
   }
 
+  // Onboarding Flow
+  if (!store.wallet.name) {
+    return <OnboardingView onComplete={store.setProfile} />;
+  }
+
   return (
     <div className="app-shell">
+      {store.errorToast && <div className="error-toast">{store.errorToast}</div>}
       <header className="topbar">
         <div>
           <span className="eyebrow">{formatShortDate(toDateKey())}</span>
-          <h1>Level Up</h1>
+          <h1>Level Up, {store.wallet.name}</h1>
         </div>
         <div className={`sync-pill ${store.online ? "online" : "offline"}`}>
           <span />
@@ -77,11 +85,10 @@ export function App() {
         {activeTab === "rewards" && <RewardsView rewards={store.rewards} coins={store.wallet.coins} onRedeem={store.redeemReward} />}
         {activeTab === "profile" && (
           <ProfileView
-            lifetimeXp={store.wallet.lifetimeXp}
-            lifetimeCoins={store.wallet.lifetimeCoins}
-            health={store.wallet.health}
+            wallet={store.wallet}
             redemptions={store.redemptions.length}
             pendingCount={store.pendingMutations.length}
+            checkins={store.checkins}
           />
         )}
       </main>
@@ -94,6 +101,80 @@ export function App() {
           </button>
         ))}
       </nav>
+    </div>
+  );
+}
+
+function OnboardingView({ onComplete }: { onComplete: (name: string, age: number, initialHabits: Habit[]) => Promise<void> }) {
+  const [step, setStep] = useState(1);
+  const [name, setName] = useState("");
+  const [age, setAge] = useState("");
+  const [b1, setB1] = useState("");
+  const [b2, setB2] = useState("");
+  const [q1, setQ1] = useState("");
+
+  const handleNext = () => setStep(step + 1);
+
+  const finish = () => {
+    const defaultDiff = "medium" as Difficulty;
+    const habits: Habit[] = [];
+    const makeHabit = (title: string, kind: HabitKind) => ({
+      id: createId("habit"),
+      title,
+      description: "My starting habit",
+      kind,
+      difficulty: defaultDiff,
+      cadence: "daily" as const,
+      targetCount: 1,
+      targetUnit: "session",
+      coinReward: 10,
+      xpReward: 20,
+      healthPenalty: 5,
+      color: kind === "quit" ? "#d95d39" : "#4fb286",
+      currentStreak: 0,
+      bestStreak: 0,
+      nextDueDate: toDateKey(),
+      isActive: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    if (b1.trim()) habits.push(makeHabit(b1, "build"));
+    if (b2.trim()) habits.push(makeHabit(b2, "build"));
+    if (q1.trim()) habits.push(makeHabit(q1, "quit"));
+
+    onComplete(name || "Player", parseInt(age) || 18, habits);
+  };
+
+  return (
+    <div className="app-shell" style={{ justifyContent: "center", alignItems: "center", padding: "20px" }}>
+      <div className="onboarding-card">
+        {step === 1 && (
+          <>
+            <h2>Welcome to Level Up</h2>
+            <p>Let's create your character profile.</p>
+            <input placeholder="Your Name" value={name} onChange={e => setName(e.target.value)} />
+            <input type="number" placeholder="Your Age" value={age} onChange={e => setAge(e.target.value)} />
+            <button className="primary-action" onClick={handleNext} disabled={!name}>Next</button>
+          </>
+        )}
+        {step === 2 && (
+          <>
+            <h2>Choose 2 Habits to Build</h2>
+            <p>What are two things you want to do every day?</p>
+            <input placeholder="E.g., Read 10 pages" value={b1} onChange={e => setB1(e.target.value)} />
+            <input placeholder="E.g., Drink 2L of water" value={b2} onChange={e => setB2(e.target.value)} />
+            <button className="primary-action" onClick={handleNext}>Next</button>
+          </>
+        )}
+        {step === 3 && (
+          <>
+            <h2>Choose 1 Habit to Quit</h2>
+            <p>What is one thing you want to stop doing?</p>
+            <input placeholder="E.g., Doomscrolling" value={q1} onChange={e => setQ1(e.target.value)} />
+            <button className="primary-action" onClick={finish}>Start My Journey</button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -173,7 +254,7 @@ function HabitCard({ habit, completed, onComplete }: { habit: Habit; completed: 
         <span>
           {habit.targetCount} {habit.targetUnit}
         </span>
-        <span>{habit.xpReward} XP</span>
+        <span>{habit.difficulty.toUpperCase()}</span>
         <span>{habit.coinReward} coins</span>
       </div>
       <button className="primary-action" disabled={completed} onClick={onComplete}>
@@ -209,7 +290,7 @@ function HabitsView({
 
   return (
     <section className="stack">
-      <SectionTitle title="Habits" detail={`${habits.length} active`} />
+      <SectionTitle title="Habits" detail={`${habits.length}/20 active`} />
       <form className="create-form" onSubmit={handleSubmit}>
         <div className="segmented">
           <button type="button" className={kind === "build" ? "active" : ""} onClick={() => setKind("build")}>
@@ -259,14 +340,25 @@ function AiCommandView({
     await onSendCommand(msg);
   }
 
+  const quickActions = [
+    { label: "➕ Add Habit", template: "Add a habit to ..." },
+    { label: "✏️ Alter Habit", template: "Alter the habit called ... to easy" },
+    { label: "🗑️ Delete Habit", template: "Delete the habit called ..." },
+  ];
+
   return (
     <section className="stack">
       <SectionTitle title="AI Command Center" detail="Manage your app" />
       <div className="planner-panel">
+        <div className="quick-actions">
+          {quickActions.map(a => (
+            <button key={a.label} className="quick-chip" onClick={() => setMessage(a.template)}>{a.label}</button>
+          ))}
+        </div>
         <div className="ai-chat-history">
           {commandHistory.length === 0 ? (
             <div className="empty-state" style={{ padding: "10px" }}>
-              <p>Type a command like "add a cheat meal reward" or "make all habits heroic".</p>
+              <p>Select a quick action above or type a command naturally.</p>
             </div>
           ) : (
             commandHistory.map((msg) => (
@@ -298,7 +390,7 @@ function RewardsView({ rewards, coins, onRedeem }: { rewards: Reward[]; coins: n
       {rewards.map((reward) => (
         <article className="reward-card" key={reward.id}>
           <div>
-            <span>{reward.durationMinutes} min</span>
+            <span>{reward.durationMinutes > 0 ? `${reward.durationMinutes} min` : "Instant"}</span>
             <h2>{reward.title}</h2>
             <p>{reward.description}</p>
           </div>
@@ -312,32 +404,48 @@ function RewardsView({ rewards, coins, onRedeem }: { rewards: Reward[]; coins: n
 }
 
 function ProfileView({
-  lifetimeXp,
-  lifetimeCoins,
-  health,
+  wallet,
   redemptions,
   pendingCount,
+  checkins
 }: {
-  lifetimeXp: number;
-  lifetimeCoins: number;
-  health: number;
+  wallet: any;
   redemptions: number;
   pendingCount: number;
+  checkins: any[];
 }) {
   const stats = useMemo(
     () => [
-      ["Lifetime XP", lifetimeXp],
-      ["Coins earned", lifetimeCoins],
-      ["Health", `${health}%`],
+      ["Age", wallet.age],
+      ["Lifetime XP", wallet.lifetimeXp],
+      ["Coins earned", wallet.lifetimeCoins],
+      ["Health", `${wallet.health}%`],
       ["Rewards used", redemptions],
-      ["Queued syncs", pendingCount],
     ],
-    [health, lifetimeCoins, lifetimeXp, pendingCount, redemptions],
+    [wallet, redemptions],
   );
+
+  // Group checkins by date to count completions for the graph
+  const chartData = useMemo(() => {
+    const dataMap: Record<string, number> = {};
+    checkins.forEach(c => {
+      if (c.status === "completed" || c.status === "resisted") {
+        dataMap[c.date] = (dataMap[c.date] || 0) + 1;
+      }
+    });
+    // Convert to array and sort by date
+    return Object.entries(dataMap)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-14) // Show last 14 active days
+      .map(([date, count]) => ({
+        date: formatShortDate(date),
+        completions: count
+      }));
+  }, [checkins]);
 
   return (
     <section className="stack">
-      <SectionTitle title="Profile" detail="Local-first" />
+      <SectionTitle title={`${wallet.name}'s Profile`} detail="Local-first" />
       <div className="profile-grid">
         {stats.map(([label, value]) => (
           <div key={label as string}>
@@ -346,9 +454,25 @@ function ProfileView({
           </div>
         ))}
       </div>
+      
+      {chartData.length > 0 && (
+        <div className="chart-container" style={{ background: "rgba(255,255,255,0.05)", padding: "16px", borderRadius: "16px", marginTop: "16px" }}>
+          <h3 style={{ marginBottom: "16px", fontSize: "14px", color: "var(--fg-muted)" }}>Recent Completions</h3>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+              <XAxis dataKey="date" stroke="rgba(255,255,255,0.5)" fontSize={12} />
+              <YAxis stroke="rgba(255,255,255,0.5)" fontSize={12} allowDecimals={false} />
+              <Tooltip contentStyle={{ background: "#222", border: "none", borderRadius: "8px" }} />
+              <Line type="monotone" dataKey="completions" stroke="#4fb286" strokeWidth={3} dot={{ r: 4, fill: "#4fb286" }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
       <div className="architecture-note">
         <h2>Offline-first architecture</h2>
-        <p>Habits, check-ins, rewards, wallet entries, and sync mutations are stored in IndexedDB. The service worker caches the app shell, and pending mutations are marked processed when the app comes back online.</p>
+        <p>Your AI perfectly understands intents entirely locally inside a Web Worker. No servers, no latency, no subscription fees. It's completely free forever.</p>
       </div>
     </section>
   );

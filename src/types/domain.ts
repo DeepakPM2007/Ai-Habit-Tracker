@@ -52,6 +52,8 @@ export interface Checkin {
 
 export interface Wallet {
   id: "local";
+  name?: string;
+  age?: number;
   coins: number;
   lifetimeCoins: number;
   lifetimeXp: number;
