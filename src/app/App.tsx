@@ -1,5 +1,5 @@
 import React, { useState, useEffect, type FormEvent, useMemo } from "react";
-import type { AiCommandMessage, Difficulty, Habit, HabitKind, Reward, RewardRedemption, TabKey } from "../types/domain";
+import type { AiCommandMessage, Checkin, Difficulty, Habit, HabitKind, Reward, RewardRedemption, TabKey, Wallet } from "../types/domain";
 import { useLevelUpStore } from "../hooks/useLevelUpStore";
 import { formatShortDate, toDateKey } from "../utils/dates";
 import { levelProgress, xpForNextLevel } from "../utils/leveling";
