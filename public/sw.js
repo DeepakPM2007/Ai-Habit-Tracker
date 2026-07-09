@@ -1,5 +1,6 @@
-const CACHE_NAME = "level-up-shell-v1";
-const APP_SHELL = ["/", "/index.html", "/offline.html", "/manifest.webmanifest", "/icons/level-up.svg"];
+const CACHE_NAME = "level-up-shell-v2";
+const BASE = self.location.pathname.replace("sw.js", "");
+const APP_SHELL = [BASE, BASE + "index.html", BASE + "offline.html", BASE + "manifest.webmanifest", BASE + "icons/level-up.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -28,10 +29,10 @@ self.addEventListener("fetch", (event) => {
       fetch(request)
         .then((response) => {
           const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("/", clone));
+          caches.open(CACHE_NAME).then((cache) => cache.put(BASE, clone));
           return response;
         })
-        .catch(() => caches.match("/") || caches.match("/offline.html"))
+        .catch(() => caches.match(BASE) || caches.match(BASE + "offline.html"))
     );
     return;
   }
@@ -50,7 +51,7 @@ self.addEventListener("fetch", (event) => {
           }
           return response;
         })
-        .catch(() => caches.match("/offline.html"));
+        .catch(() => caches.match(BASE + "offline.html"));
     })
   );
 });

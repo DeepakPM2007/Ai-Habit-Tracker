@@ -2,14 +2,14 @@
   "name": "Level Up",
   "short_name": "Level Up",
   "description": "An offline-first habit builder and bad-habit quitter with XP, coins, rewards, and AI streak protection.",
-  "start_url": "/",
+  "start_url": ".",
   "display": "standalone",
   "background_color": "#f6f5ef",
   "theme_color": "#101820",
   "orientation": "portrait",
   "icons": [
     {
-      "src": "/icons/level-up.svg",
+      "src": "./icons/level-up.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

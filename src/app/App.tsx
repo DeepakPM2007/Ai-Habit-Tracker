@@ -60,7 +60,7 @@ function InnerApp() {
   if (store.loading) {
     return (
       <main className="loading-screen">
-        <img src="/icons/level-up.svg" alt="" />
+        <img src={import.meta.env.BASE_URL + "icons/level-up.svg"} alt="" />
         <p>Loading your quest log...</p>
       </main>
     );
@@ -69,7 +69,7 @@ function InnerApp() {
   if (store.startupError) {
     return (
       <main className="loading-screen">
-        <img src="/icons/level-up.svg" alt="" />
+        <img src={import.meta.env.BASE_URL + "icons/level-up.svg"} alt="" />
         <p>Local database startup failed: {store.startupError}</p>
       </main>
     );
